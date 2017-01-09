@@ -15,12 +15,16 @@
 		"onCommand:terminalTest.createAndSend",
 		"onCommand:terminalTest.createZshLoginShell"
 	],
-	"main": "./out/src/extension",
+	"main": "./out/extension",
 	"contributes": {
 		"commands": [
 			{
 				"command": "terminalTest.createTerminal",
 				"title": "Terminal API: Create Terminal"
+			},
+			{
+				"command": "terminalTest.createTerminalWaitOnExit",
+				"title": "Terminal API: Create Terminal (waitOnExit)"
 			},
 			{
 				"command": "terminalTest.hide",

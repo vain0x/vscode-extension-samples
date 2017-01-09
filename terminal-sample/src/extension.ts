@@ -6,7 +6,7 @@ export function activate(context: vscode.ExtensionContext) {
 	let terminalStack: vscode.Terminal[] = [];
 
 	context.subscriptions.push(vscode.commands.registerCommand('terminalTest.createTerminal', () => {
-		terminalStack.push(vscode.window.createTerminal(`Ext Terminal #${terminalStack.length + 1}`));
+		terminalStack.push(vscode.window.createTerminal(getNewTerminalName()));
 	}));
 	context.subscriptions.push(vscode.commands.registerCommand('terminalTest.hide', () => {
 		if (terminalStack.length === 0) {
@@ -46,13 +46,13 @@ export function activate(context: vscode.ExtensionContext) {
 		terminalStack.pop();
 	}));
 	context.subscriptions.push(vscode.commands.registerCommand('terminalTest.createAndSend', () => {
-		terminalStack.push(vscode.window.createTerminal(`Ext Terminal #${terminalStack.length + 1}`));
+		terminalStack.push(vscode.window.createTerminal(getNewTerminalName()));
 		getLatestTerminal().sendText("echo 'Sent text immediately after creating'");
 	}));
 
 	// Below coming in version v1.6
 	context.subscriptions.push(vscode.commands.registerCommand('terminalTest.createZshLoginShell', () => {
-		terminalStack.push((<any>vscode.window).createTerminal(`Ext Terminal #${terminalStack.length + 1}`, '/bin/zsh', ['-l']));
+		terminalStack.push((<any>vscode.window).createTerminal(getNewTerminalName(), '/bin/zsh', ['-l']));
 	}));
 	context.subscriptions.push(vscode.commands.registerCommand('terminalTest.processId', () => {
 		(<any>getLatestTerminal()).processId.then((processId) => {
@@ -65,7 +65,19 @@ export function activate(context: vscode.ExtensionContext) {
 		});
 	}
 
+	// Below coming in version v1.9
+	context.subscriptions.push(vscode.commands.registerCommand('terminalTest.createTerminalWaitOnExit', () => {
+		terminalStack.push((<any>vscode.window).createTerminal({
+			name: getNewTerminalName(),
+			waitOnExit: true
+		}));
+	}));
+
 	function getLatestTerminal() {
 		return terminalStack[terminalStack.length - 1];
+	}
+
+	function getNewTerminalName() {
+		return `Ext Terminal #${terminalStack.length + 1}`;
 	}
 }
