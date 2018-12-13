@@ -14,7 +14,9 @@ import {
 	DidChangeConfigurationNotification,
 	CompletionItem,
 	CompletionItemKind,
-	TextDocumentPositionParams
+	TextDocumentPositionParams,
+	Location,
+	Range
 } from 'vscode-languageserver';
 
 // Create a connection for the server. The connection uses Node's IPC as a transport.
@@ -47,7 +49,8 @@ connection.onInitialize((params: InitializeParams) => {
 			// Tell the client that the server supports code completion
 			completionProvider: {
 				resolveProvider: true
-			}
+			},
+			referencesProvider: true,
 		}
 	};
 });
@@ -121,13 +124,20 @@ documents.onDidChangeContent(change => {
 	validateTextDocument(change.document);
 });
 
-const parseSource = async (textDocument: TextDocument) => {
-	let source = textDocument.getText();
+const documentMap = new Map<string, any>()
 
-	let diagnostics: Diagnostic[] = []
+const parseSource = (source: string) => {
+	let envs = []
+	let id = 0
+
+	let refs: any[] = []
+	let diags: any[] = []
 	let i = 0
 	const isName = s => {
 		return /[a-zA-Z_]/.test(s)
+	}
+	const followedByExpr = () => {
+		return i < source.length && (isName(source[i]) || source[i] === '(')
 	}
 	const skipSpaces = () => {
 		while (source[i] === ' ' || source[i] === '\n') {
@@ -136,11 +146,10 @@ const parseSource = async (textDocument: TextDocument) => {
 	}
 	const parseName = onName => {
 		if (!isName(source[i])) {
-			diagnostics.push({
-				severity: DiagnosticSeverity.Warning,
-				range: { start: textDocument.positionAt(i), end: textDocument.positionAt(i + 1) },
-				message: "expected an identifier",
-				source: "lambda"
+			diags.push({
+				type: "warn",
+				range: [i, i + 1],
+				message: "Expected an identifier",
 			})
 			return
 		}
@@ -151,9 +160,8 @@ const parseSource = async (textDocument: TextDocument) => {
 	}
 	const expect = (expected, next) => {
 		if (!source.startsWith(expected, i)) {
-			diagnostics.push({
-				severity: DiagnosticSeverity.Warning,
-				range: { start: textDocument.positionAt(i), end: textDocument.positionAt(i + 1) },
+			diags.push({
+				range: [i, i + 1],
 				message: `Expected ${expected}`,
 				source: "lambda"
 			})
@@ -163,25 +171,95 @@ const parseSource = async (textDocument: TextDocument) => {
 		i += expected.length
 		next()
 	}
+
+	const parseAtom = next => {
+		if (source[i] === '(') {
+			i += 1
+			skipSpaces()
+			parseExpr(expr => {
+				expect(')', () => {
+					skipSpaces()
+					next(expr)
+				})
+			})
+			return
+		}
+
+		if (isName(source[i])) {
+			const start = i
+			parseName(name => {
+				const end = i
+				let nameId = -1
+				for (let d = envs.length - 1; d >= 0; d--) {
+					if (envs[d][name] !== undefined) {
+						nameId = envs[d][name]
+						break
+					}
+				}
+				if (nameId < 0) {
+					diags.push({
+						message: "Undefined: " + JSON.stringify({name,envs}),
+						range: [start, end],
+					})
+				} else {
+					refs.push({
+						type: "ref", nameId, name, range: [start, end],
+					})
+				}
+				next({ type: "ref", name })
+			})
+			return
+		}
+
+		diags.push({
+			range: [i, i + 1],
+			message: `Expected an atomic expression`,
+			source: "lambda"
+		})
+	}
+
+	const parseApp = next => {
+		parseAtom(l => {
+			skipSpaces()
+
+			if (followedByExpr()) {
+				parseExpr(r => {
+					next({ type: "app", l, r })
+				})
+				return
+			}
+
+			next(l)
+		})
+	}
+
 	const parseExpr = next => {
 		if (i >= source.length) {
-			diagnostics.push({
-				severity: DiagnosticSeverity.Warning,
-				range: { start: textDocument.positionAt(i), end: textDocument.positionAt(i + 1) },
+			diags.push({
+				range: [i, i + 1],
 				message: `Expected an expression buf eof`,
-				source: "lambda"
 			})
 			return
 		}
 
 		if (source.startsWith("fun", i)) {
 			i += 3
+
 			skipSpaces()
+			const start = i
 			parseName(name => {
+				const end = i
+
+				const nameId = ++id
+				envs.push({ [name]: nameId })
+				refs.push({ type: "def", nameId, name, range: [start, end] })
+
 				skipSpaces()
 				expect("->", () => {
 					skipSpaces()
+
 					parseExpr(body => {
+						envs.pop()
 						next({ type: "fun", arg: name, body })
 					})
 				})
@@ -189,19 +267,7 @@ const parseSource = async (textDocument: TextDocument) => {
 			return
 		}
 
-		if (isName(source[i])) {
-			parseName(name => {
-				next({ type: "ref", name })
-			})
-			return
-		}
-
-		diagnostics.push({
-			severity: DiagnosticSeverity.Warning,
-			range: { start: textDocument.positionAt(i), end: textDocument.positionAt(i + 1) },
-			message: `Expected an identifier or 'fun'`,
-			source: "lambda"
-		})
+		parseApp(next)
 	}
 
 	skipSpaces()
@@ -210,22 +276,46 @@ const parseSource = async (textDocument: TextDocument) => {
 			skipSpaces()
 
 			if (i < source.length) {
-				diagnostics.push({
-					severity: DiagnosticSeverity.Warning,
-					range: { start: textDocument.positionAt(i), end: textDocument.positionAt(i + 1) },
+				diags.push({
+					range: [i, i + 1],
 					message: `Expected an eof`,
-					source: "lambda"
 				})
 			}
 		})
 	}
 
-	// Send the computed diagnostics to VSCode.
-	connection.sendDiagnostics({ uri: textDocument.uri, diagnostics });
+	return {
+		diags,
+		refs,
+	}
 }
 
 async function validateTextDocument(textDocument: TextDocument): Promise<void> {
-	parseSource(textDocument)
+	const { diags, refs } = parseSource(textDocument.getText())
+
+	const diagnostics = diags.map(d => {
+		const [start, end] = d.range
+		const { message } = d
+		return {
+			severity: DiagnosticSeverity.Warning,
+			range: { start: textDocument.positionAt(start), end: textDocument.positionAt(end) },
+			message,
+			source: "lambda"
+		}
+	})
+	// Send the computed diagnostics to VSCode.
+	connection.sendDiagnostics({ uri: textDocument.uri, diagnostics });
+
+	const references = refs.map(({ type, nameId, name, range: [start, end] }) => {
+		const range = {
+			start: textDocument.positionAt(start),
+			end: textDocument.positionAt(end),
+		}
+		return { type, nameId, name, range }
+	})
+
+	documentMap.set(textDocument.uri, { references })
+
 	// // In this simple example we get the settings for every validate run.
 	// let settings = await getDocumentSettings(textDocument.uri);
 
@@ -312,6 +402,33 @@ connection.onCompletionResolve(
 		return item;
 	}
 );
+
+connection.onReferences(async params => {
+	const { context, textDocument, position } = params
+	const c = documentMap.get(textDocument.uri)
+	if (!c) {
+		return []
+	}
+
+	const { references } = c
+	const locations = []
+	for (const { nameId: targetNameId, range: { start, end } } of references) {
+		if (position.line === start.line && position.character === start.character) {
+			for (const { type, nameId, range } of references) {
+				if (!context.includeDeclaration && type === "def") {
+					continue
+				}
+				if (nameId !== targetNameId) {
+					continue
+				}
+
+				locations.push(Location.create(textDocument.uri, range))
+			}
+		}
+	}
+
+	return locations
+})
 
 /*
 connection.onDidOpenTextDocument((params) => {
