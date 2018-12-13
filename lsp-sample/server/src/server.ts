@@ -38,8 +38,8 @@ connection.onInitialize((params: InitializeParams) => {
 	hasWorkspaceFolderCapability = !!(capabilities.workspace && !!capabilities.workspace.workspaceFolders);
 	hasDiagnosticRelatedInformationCapability =
 		!!(capabilities.textDocument &&
-		capabilities.textDocument.publishDiagnostics &&
-		capabilities.textDocument.publishDiagnostics.relatedInformation);
+			capabilities.textDocument.publishDiagnostics &&
+			capabilities.textDocument.publishDiagnostics.relatedInformation);
 
 	return {
 		capabilities: {
@@ -121,51 +121,155 @@ documents.onDidChangeContent(change => {
 	validateTextDocument(change.document);
 });
 
-async function validateTextDocument(textDocument: TextDocument): Promise<void> {
-	// In this simple example we get the settings for every validate run.
-	let settings = await getDocumentSettings(textDocument.uri);
+const parseSource = async (textDocument: TextDocument) => {
+	let source = textDocument.getText();
 
-	// The validator creates diagnostics for all uppercase words length 2 and more
-	let text = textDocument.getText();
-	let pattern = /\b[A-Z]{2,}\b/g;
-	let m: RegExpExecArray | null;
-
-	let problems = 0;
-	let diagnostics: Diagnostic[] = [];
-	while ((m = pattern.exec(text)) && problems < settings.maxNumberOfProblems) {
-		problems++;
-		let diagnosic: Diagnostic = {
-			severity: DiagnosticSeverity.Warning,
-			range: {
-				start: textDocument.positionAt(m.index),
-				end: textDocument.positionAt(m.index + m[0].length)
-			},
-			message: `${m[0]} is all uppercase.`,
-			source: 'ex'
-		};
-		if (hasDiagnosticRelatedInformationCapability) {
-			diagnosic.relatedInformation = [
-				{
-					location: {
-						uri: textDocument.uri,
-						range: Object.assign({}, diagnosic.range)
-					},
-					message: 'Spelling matters'
-				},
-				{
-					location: {
-						uri: textDocument.uri,
-						range: Object.assign({}, diagnosic.range)
-					},
-					message: 'Particularly for names'
-				}
-			];
+	let diagnostics: Diagnostic[] = []
+	let i = 0
+	const isName = s => {
+		return /[a-zA-Z_]/.test(s)
+	}
+	const skipSpaces = () => {
+		while (source[i] === ' ' || source[i] === '\n') {
+			i++
 		}
-		diagnostics.push(diagnosic);
+	}
+	const parseName = onName => {
+		if (!isName(source[i])) {
+			diagnostics.push({
+				severity: DiagnosticSeverity.Warning,
+				range: { start: textDocument.positionAt(i), end: textDocument.positionAt(i + 1) },
+				message: "expected an identifier",
+				source: "lambda"
+			})
+			return
+		}
+
+		const name = source[i]
+		i++
+		onName(name)
+	}
+	const expect = (expected, next) => {
+		if (!source.startsWith(expected, i)) {
+			diagnostics.push({
+				severity: DiagnosticSeverity.Warning,
+				range: { start: textDocument.positionAt(i), end: textDocument.positionAt(i + 1) },
+				message: `Expected ${expected}`,
+				source: "lambda"
+			})
+			return
+		}
+
+		i += expected.length
+		next()
+	}
+	const parseExpr = next => {
+		if (i >= source.length) {
+			diagnostics.push({
+				severity: DiagnosticSeverity.Warning,
+				range: { start: textDocument.positionAt(i), end: textDocument.positionAt(i + 1) },
+				message: `Expected an expression buf eof`,
+				source: "lambda"
+			})
+			return
+		}
+
+		if (source.startsWith("fun", i)) {
+			i += 3
+			skipSpaces()
+			parseName(name => {
+				skipSpaces()
+				expect("->", () => {
+					skipSpaces()
+					parseExpr(body => {
+						next({ type: "fun", arg: name, body })
+					})
+				})
+			})
+			return
+		}
+
+		if (isName(source[i])) {
+			parseName(name => {
+				next({ type: "ref", name })
+			})
+			return
+		}
+
+		diagnostics.push({
+			severity: DiagnosticSeverity.Warning,
+			range: { start: textDocument.positionAt(i), end: textDocument.positionAt(i + 1) },
+			message: `Expected an identifier or 'fun'`,
+			source: "lambda"
+		})
+	}
+
+	skipSpaces()
+	if (i < source.length) {
+		parseExpr(() => {
+			skipSpaces()
+
+			if (i < source.length) {
+				diagnostics.push({
+					severity: DiagnosticSeverity.Warning,
+					range: { start: textDocument.positionAt(i), end: textDocument.positionAt(i + 1) },
+					message: `Expected an eof`,
+					source: "lambda"
+				})
+			}
+		})
 	}
 
 	// Send the computed diagnostics to VSCode.
 	connection.sendDiagnostics({ uri: textDocument.uri, diagnostics });
+}
+
+async function validateTextDocument(textDocument: TextDocument): Promise<void> {
+	parseSource(textDocument)
+	// // In this simple example we get the settings for every validate run.
+	// let settings = await getDocumentSettings(textDocument.uri);
+
+	// // The validator creates diagnostics for all uppercase words length 2 and more
+	// let text = textDocument.getText();
+	// let pattern = /\b[A-Z]{2,}\b/g;
+	// let m: RegExpExecArray | null;
+
+	// let problems = 0;
+	// let diagnostics: Diagnostic[] = [];
+	// while ((m = pattern.exec(text)) && problems < settings.maxNumberOfProblems) {
+	// 	problems++;
+	// 	let diagnosic: Diagnostic = {
+	// 		severity: DiagnosticSeverity.Warning,
+	// 		range: {
+	// 			start: textDocument.positionAt(m.index),
+	// 			end: textDocument.positionAt(m.index + m[0].length)
+	// 		},
+	// 		message: `${m[0]} is all uppercase.`,
+	// 		source: 'ex'
+	// 	};
+	// 	if (hasDiagnosticRelatedInformationCapability) {
+	// 		diagnosic.relatedInformation = [
+	// 			{
+	// 				location: {
+	// 					uri: textDocument.uri,
+	// 					range: Object.assign({}, diagnosic.range)
+	// 				},
+	// 				message: 'Spelling matters'
+	// 			},
+	// 			{
+	// 				location: {
+	// 					uri: textDocument.uri,
+	// 					range: Object.assign({}, diagnosic.range)
+	// 				},
+	// 				message: 'Particularly for names'
+	// 			}
+	// 		];
+	// 	}
+	// 	diagnostics.push(diagnosic);
+	// }
+
+	// // Send the computed diagnostics to VSCode.
+	// connection.sendDiagnostics({ uri: textDocument.uri, diagnostics });
 }
 
 connection.onDidChangeWatchedFiles(_change => {
