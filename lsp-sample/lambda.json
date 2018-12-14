@@ -1,0 +1,21 @@
+{
+	"name": "Lambda",
+	"scopeName": "source.lambda",
+	"fileTypes": [
+		"lambda"
+	],
+	"patterns": [
+		{
+			"match": "\\b(fun)\\b",
+			"name": "keyword.lambda"
+		},
+		{
+			"match": "\\b([a-zA-Z_][a-zA-Z0-9_]+)\\b",
+			"name": "entity.name.lambda"
+		},
+		{
+			"match": "//.*$",
+			"name": "comment.block"
+		}
+	]
+}
